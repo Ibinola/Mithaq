@@ -2912,3 +2912,238 @@ fn test_submit_proof_with_nullifier_rejects_sybil_reuse() {
     );
     assert!(second_attempt.is_err(), "Second submission with same nullifier in same context must revert");
 }
+
+// ── Delegation events and reads (CONTRACT-33 / CONTRACT-34) ──────────────────
+
+#[test]
+fn delegation_grant_and_revoke_events_are_fully_specified() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let h = deploy(&env);
+    let holder = Address::generate(&env);
+    let verifier = Address::generate(&env);
+    let kyc = symbol_short!("kyc");
+
+    h.registry.grant_verification(&holder, &verifier, &kyc, &5000);
+    // `env.events().all()` only holds the most recent top-level invocation, so assert at once.
+    assert_eq!(
+        env.events().all().filter_by_contract(&h.registry_id),
+        vec![
+            &env,
+            (
+                h.registry_id.clone(),
+                (symbol_short!("proof_reg"), symbol_short!("dlg_grant"), kyc.clone()).into_val(&env),
+                EventVerificationGranted {
+                    holder: holder.clone(),
+                    verifier: verifier.clone(),
+                    expiry: 5000,
+                }
+                .into_val(&env),
+            ),
+        ],
+    );
+
+    h.registry.revoke_verification(&holder, &verifier, &kyc);
+    assert_eq!(
+        env.events().all().filter_by_contract(&h.registry_id),
+        vec![
+            &env,
+            (
+                h.registry_id.clone(),
+                (symbol_short!("proof_reg"), symbol_short!("dlg_revok"), kyc.clone()).into_val(&env),
+                EventVerificationRevoked {
+                    holder: holder.clone(),
+                    verifier: verifier.clone(),
+                }
+                .into_val(&env),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn delegation_events_carry_the_credential_type_scope_in_their_topics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let h = deploy(&env);
+    let holder = Address::generate(&env);
+    let verifier = Address::generate(&env);
+
+    // A grant for one credential type does not delegate another.
+    h.registry
+        .grant_verification(&holder, &verifier, &symbol_short!("age"), &5000);
+    assert_eq!(
+        h.registry
+            .delegation_expiry(&holder, &verifier, &symbol_short!("kyc")),
+        None
+    );
+    assert_eq!(
+        h.registry
+            .delegation_expiry(&holder, &verifier, &symbol_short!("age")),
+        Some(5000)
+    );
+}
+
+#[test]
+fn delegation_expiry_read_reports_existence_and_expiry() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let h = deploy(&env);
+    let holder = Address::generate(&env);
+    let verifier = Address::generate(&env);
+    let other = Address::generate(&env);
+    let kyc = symbol_short!("kyc");
+
+    assert_eq!(h.registry.delegation_expiry(&holder, &verifier, &kyc), None);
+
+    h.registry.grant_verification(&holder, &verifier, &kyc, &5000);
+    assert_eq!(h.registry.delegation_expiry(&holder, &verifier, &kyc), Some(5000));
+    assert_eq!(h.registry.delegation_expiry(&holder, &other, &kyc), None);
+
+    // Re-granting overwrites the expiry.
+    h.registry.grant_verification(&holder, &verifier, &kyc, &6000);
+    assert_eq!(h.registry.delegation_expiry(&holder, &verifier, &kyc), Some(6000));
+
+    // At the expiry ledger the grant is already expired (exclusive boundary).
+    env.ledger().set_timestamp(5999);
+    assert_eq!(h.registry.delegation_expiry(&holder, &verifier, &kyc), Some(6000));
+    env.ledger().set_timestamp(6000);
+    assert_eq!(h.registry.delegation_expiry(&holder, &verifier, &kyc), None);
+
+    env.ledger().set_timestamp(100);
+    h.registry.revoke_verification(&holder, &verifier, &kyc);
+    assert_eq!(h.registry.delegation_expiry(&holder, &verifier, &kyc), None);
+}
+
+// ── Nullifier uniqueness and context domains (CONTRACT-35 / CONTRACT-36) ─────
+
+#[test]
+fn failed_submission_does_not_consume_the_nullifier() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let h = deploy(&env);
+    let holder = Address::generate(&env);
+    let app_context = BytesN::from_array(&env, &[7u8; 32]);
+    let nullifier = BytesN::from_array(&env, &[8u8; 32]);
+
+    // A tampered proof reverts the whole transaction, including `record_nullifier`.
+    let failed = h.registry.try_submit_proof_with_nullifier(
+        &holder,
+        &h.issuer,
+        &symbol_short!("kyc"),
+        &KYC.tampered_proof(&env),
+        &KYC.public_inputs_bytes(&env),
+        &None,
+        &1000,
+        &app_context,
+        &nullifier,
+    );
+    assert!(failed.is_err());
+    assert!(!h.registry.is_nullifier_used(&app_context, &nullifier));
+
+    // The same nullifier is still usable with a valid proof.
+    h.registry.submit_proof_with_nullifier(
+        &holder,
+        &h.issuer,
+        &symbol_short!("kyc"),
+        &KYC.proof_bytes(&env),
+        &KYC.public_inputs_bytes(&env),
+        &None,
+        &1000,
+        &app_context,
+        &nullifier,
+    );
+    assert!(h.registry.is_nullifier_used(&app_context, &nullifier));
+}
+
+#[test]
+fn same_nullifier_in_different_contexts_is_independent_across_submissions() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let h = deploy(&env);
+    let holder_a = Address::generate(&env);
+    let holder_b = Address::generate(&env);
+    let nullifier = BytesN::from_array(&env, &[9u8; 32]);
+    let context_a = BytesN::from_array(&env, &[1u8; 32]);
+    let context_b = BytesN::from_array(&env, &[2u8; 32]);
+
+    for (holder, context) in [(&holder_a, &context_a), (&holder_b, &context_b)] {
+        h.registry.submit_proof_with_nullifier(
+            holder,
+            &h.issuer,
+            &symbol_short!("kyc"),
+            &KYC.proof_bytes(&env),
+            &KYC.public_inputs_bytes(&env),
+            &None,
+            &1000,
+            context,
+            &nullifier,
+        );
+    }
+    assert!(h.registry.is_nullifier_used(&context_a, &nullifier));
+    assert!(h.registry.is_nullifier_used(&context_b, &nullifier));
+}
+
+#[test]
+fn batch_submission_does_not_touch_nullifiers() {
+    // `submit_proofs` and `submit_aggregate_proof` take no nullifier or context. Nullifier
+    // uniqueness is enforced only by `record_nullifier` / `submit_proof_with_nullifier`.
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let h = deploy(&env);
+    let holder = Address::generate(&env);
+    let app_context = BytesN::from_array(&env, &[3u8; 32]);
+    let nullifier = BytesN::from_array(&env, &[4u8; 32]);
+
+    submit(&env, &h, &holder, 1000);
+    assert!(!h.registry.is_nullifier_used(&app_context, &nullifier));
+}
+
+/// Shared context-domain vectors (docs/NULLIFIER_AND_DELEGATION.md section 4): SDKs derive
+/// `app_context = SHA-256("mithaq:app-context:v1|" || network || "|" || app_id)`.
+#[test]
+fn app_context_domain_vectors_match_the_documented_construction() {
+    let env = Env::default();
+    let vectors: [(&str, &str, [u8; 32]); 3] = [
+        (
+            "testnet",
+            "example-dao",
+            hex_literal_32("353bdd7dfc20272bd11f3d9a3cb558ad930418398bcca6a54ba8f39eb67311cf"),
+        ),
+        (
+            "mainnet",
+            "example-dao",
+            hex_literal_32("36d4c0b3dc783bc05cd5751c6aa593d51d7d3cd85a74ceee5bb14e2a72b64885"),
+        ),
+        (
+            "testnet",
+            "other-app",
+            hex_literal_32("79c0bbd9036cdab9708522e05d7a20f4a9f523d4d1471841c02ea608be9ca2a2"),
+        ),
+    ];
+    for (network, app_id, expected) in vectors {
+        let preimage = std::format!("mithaq:app-context:v1|{}|{}", network, app_id);
+        let derived: BytesN<32> = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, preimage.as_bytes()))
+            .to_bytes();
+        assert_eq!(derived, BytesN::from_array(&env, &expected), "{network}/{app_id}");
+    }
+    // Different network or app id must give a different context.
+    assert_ne!(vectors[0].2, vectors[1].2);
+    assert_ne!(vectors[0].2, vectors[2].2);
+}
+
+fn hex_literal_32(hex: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("valid hex");
+    }
+    out
+}

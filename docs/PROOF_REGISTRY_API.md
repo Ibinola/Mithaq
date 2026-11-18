@@ -330,6 +330,27 @@ fn check_delegated_verification(env, holder: Address, verifier: Address,
 - **Panics:** none.
 - **Events:** none.
 
+### `delegation_expiry`
+
+```rust
+fn delegation_expiry(env, holder: Address, verifier: Address,
+                     credential_type: Symbol) -> Option<u64>
+```
+
+- **Audience:** Integrator
+- **Auth:** none (public read).
+- **Stability:** Stable
+- **Returns:** `Some(expiry)` while `verifier` holds a `grant_verification`
+  delegation from `holder` for that credential type that has not expired
+  (`expiry > ledger timestamp`; at `expiry` itself the grant is already expired,
+  matching `check_delegated_verification`), otherwise `None`. Unlike
+  `check_delegated_verification` it distinguishes "no grant" from "no claim"
+  and exposes the expiry. A single storage read; it never iterates.
+- **Privacy:** grants are public on-chain state, so this reveals nothing a
+  storage reader could not already see; it is not a confidentiality boundary.
+- **Panics:** none.
+- **Events:** none.
+
 ## 4. Delegated reads (Holder operations)
 
 ### `grant_verification`
@@ -733,7 +754,7 @@ fn last_migration_timestamp(env) -> u64
 | Submit / refresh claims | `submit_proof`, `submit_proof_with_nullifier`, `submit_proofs`, `submit_aggregate_proof` | Holder |
 | Nullifier checks & recording | `record_nullifier`, `is_nullifier_used` | Holder / Integrator |
 | Verify a claim | `is_verified`, `check_claim`, `get_record`, `claim_expiry` | Integrator |
-| Consent-scoped reads | `grant_verification`, `revoke_verification`, `check_delegated_verification` | Holder / Integrator |
+| Consent-scoped reads | `grant_verification`, `revoke_verification`, `check_delegated_verification`, `delegation_expiry` | Holder / Integrator |
 | Revoke | `revoke_proof`, `revoke_all` (holder), `revoke` (issuer) | Holder / Issuer |
 
 **Operational / governance — may evolve between minor versions:**
