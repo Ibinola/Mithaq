@@ -1296,3 +1296,118 @@ fn cancel_admin_proposal_emits_expected_event() {
         ],
     );
 }
+
+// ── CONTRACT-37 / CONTRACT-38: verification-key lifecycle ────────────────────
+
+#[test]
+fn vk_lifecycle_events_are_emitted_in_order_and_deprecation_is_silent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let admin = Address::generate(&env);
+    let id = env.register(CredentialVerifier, (admin.clone(),));
+    let c = CredentialVerifierClient::new(&env, &id);
+    let kyc = symbol_short!("kyc");
+    let vk = KYC.vk_bytes(&env);
+
+    // `env.events().all()` only holds the most recent top-level invocation.
+    let vk_set_event = |version: u32| {
+        (
+            id.clone(),
+            (symbol_short!("cred_ver"), symbol_short!("vk_set"), kyc.clone()).into_val(&env),
+            EventVkSet {
+                admin: admin.clone(),
+                version,
+                contract_version: CONTRACT_VERSION,
+            }
+            .into_val(&env),
+        )
+    };
+
+    c.set_vk(&kyc, &1, &vk);
+    assert_eq!(env.events().all().filter_by_contract(&id), vec![&env, vk_set_event(1)]);
+
+    c.set_vk(&kyc, &2, &vk);
+    assert_eq!(env.events().all().filter_by_contract(&id), vec![&env, vk_set_event(2)]);
+
+    // Deprecation and TTL refresh emit nothing: an indexer cannot see them.
+    c.deprecate_version(&kyc, &1);
+    assert_eq!(env.events().all().filter_by_contract(&id).len(), 0);
+    c.refresh_latest_version_ttl(&kyc);
+    assert_eq!(env.events().all().filter_by_contract(&id).len(), 0);
+
+    env.ledger().with_mut(|li| li.timestamp = MAX_PROOF_VALIDITY_SECONDS);
+    c.prune_version(&kyc, &1);
+    assert_eq!(
+        env.events().all().filter_by_contract(&id),
+        vec![
+            &env,
+            (
+                id.clone(),
+                (symbol_short!("cred_ver"), symbol_short!("vk_pruned"), kyc.clone()).into_val(&env),
+                EventVkPruned {
+                    admin: admin.clone(),
+                    version: 1,
+                    contract_version: CONTRACT_VERSION,
+                }
+                .into_val(&env),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn active_version_is_reconstructable_from_vk_set_events_after_a_sequence_of_changes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let admin = Address::generate(&env);
+    let id = env.register(CredentialVerifier, (admin,));
+    let c = CredentialVerifierClient::new(&env, &id);
+    let kyc = symbol_short!("kyc");
+    let vk = KYC.vk_bytes(&env);
+
+    // Out-of-order registration: the pointer follows the highest version, never backwards.
+    c.set_vk(&kyc, &2, &vk);
+    c.set_vk(&kyc, &1, &vk);
+    assert_eq!(c.get_latest_version(&kyc), 2);
+
+    c.set_vk(&kyc, &3, &vk);
+    assert_eq!(c.get_latest_version(&kyc), 3);
+
+    // Deprecating and pruning an older version leaves the latest pointer alone.
+    c.deprecate_version(&kyc, &1);
+    env.ledger().with_mut(|li| li.timestamp = MAX_PROOF_VALIDITY_SECONDS);
+    c.prune_version(&kyc, &1);
+    assert_eq!(c.get_latest_version(&kyc), 3);
+    // So "active version = highest version seen in vk_set events" holds throughout.
+}
+
+#[test]
+fn prune_boundary_is_inclusive_and_a_pruned_version_cannot_be_reused_or_verified() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let admin = Address::generate(&env);
+    let id = env.register(CredentialVerifier, (admin,));
+    let c = CredentialVerifierClient::new(&env, &id);
+    let kyc = symbol_short!("kyc");
+    let vk = KYC.vk_bytes(&env);
+
+    c.set_vk(&kyc, &1, &vk);
+    c.set_vk(&kyc, &2, &vk);
+    c.deprecate_version(&kyc, &1); // deprecated at ledger time 0
+
+    env.ledger().with_mut(|li| li.timestamp = MAX_PROOF_VALIDITY_SECONDS - 1);
+    assert!(c.try_prune_version(&kyc, &1).is_err(), "one second early");
+
+    env.ledger().with_mut(|li| li.timestamp = MAX_PROOF_VALIDITY_SECONDS);
+    c.prune_version(&kyc, &1);
+
+    // The deprecation marker outlives the key: the version cannot come back.
+    assert!(c.try_set_vk(&kyc, &1, &vk).is_err());
+    // A proof that names the pruned version can no longer be verified.
+    assert!(c
+        .try_verify_proof(&kyc, &KYC.proof_bytes(&env), &KYC.public_inputs_bytes(&env), &Some(1))
+        .is_err());
+}
