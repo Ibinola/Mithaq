@@ -474,10 +474,13 @@ fn pause(env)
 - **Events:** `("proof_reg", "paused")` → `EventPaused { admin, paused_at }`.
   (The payload field is named `admin` for event-ABI compatibility with
   existing indexers; it carries the *pauser* role holder.)
-- **Notes:** pausing blocks only new submissions (`submit_proof`,
-  `submit_proofs`, `submit_aggregate_proof`); reads, delegation and revocation
-  keep working. Pausing an already-paused contract is permitted and re-emits
-  the event.
+- **Notes:** pausing blocks all new proof submissions
+  (`submit_proof`, `submit_proofs` including batches, `submit_aggregate_proof`,
+  and `submit_proof_with_nullifier`) and standalone `record_nullifier` writes.
+  The nullifier-bearing submission cannot consume a nullifier while paused.
+  Existing proof and nullifier records are unchanged; reads, delegation, and
+  revocation keep working. Pausing an already-paused contract is permitted and
+  re-emits the event.
 
 ### `unpause`
 
