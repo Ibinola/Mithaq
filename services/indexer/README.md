@@ -39,7 +39,7 @@ To prevent scraping and denial-of-service, all HTTP endpoints are protected by p
   - `RateLimit-Limit`: Maximum requests permitted within the window.
   - `RateLimit-Remaining`: Remaining request quota in the current window.
   - `RateLimit-Reset`: Number of seconds until the rate limit window resets.
-- **429 Response**: When the quota is exceeded, the server returns status `429` with a `Retry-After: <seconds>` header and `{ "error": "too many requests", "retryAfter": <seconds> }`.
+- **429 Response**: When the quota is exceeded, the server returns status `429` with a `Retry-After: <seconds>` header and the standard error fields described below.
 
 ### Authentication & API Key Policy
 - **Decision**: Public read endpoints (`/health`, `/claims`, `/stats`, `/recent`) do **not** require API keys.
@@ -51,6 +51,11 @@ To prevent scraping and denial-of-service, all HTTP endpoints are protected by p
 
 Responses are JSON unless noted otherwise. Read endpoints are public by default;
 administrative writes and webhook subscription management require `API_KEY`.
+All REST API errors use the shape `{ "error": "...", "code": "...", "requestId": "..." }`
+and include the same identifier in the `x-request-id` response header. Error codes
+are stable categories (`INVALID_REQUEST`, `UNAUTHORIZED`, `NOT_FOUND`,
+`RATE_LIMITED`, `INTERNAL_ERROR`, and related status-specific codes); endpoint
+status codes and any additional fields such as `retryAfter` are preserved.
 
 ### 1. `GET /health`
 Returns the operational health of the indexer and the last processed ledger sequence.

@@ -462,6 +462,12 @@ pre-flight-checks that the server's signing key matches the selected issuer's
 registered public key before signing — returning `403` rather than minting a
 credential that can never verify. Note the consequence for rotation in §6.
 
+Errors from `POST /api/issue` and `POST /api/issue/batch` retain their existing
+HTTP status and include `error`, a stable machine-readable `code`, and `requestId`
+in the JSON body. The same request identifier is returned in the `x-request-id`
+header. Batch failures also include a top-level error and code, and each failed
+item has its own code; use `requestId` to correlate a request with server logs.
+
 > The demo's issuer dropdown filters to `kyc`, `age`, `jurisdiction`, `income`
 > and `funds`. If you register for `accreditation` or `employment` the record
 > is on-chain and valid, but it will not appear in that demo UI. Verify those

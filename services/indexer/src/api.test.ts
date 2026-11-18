@@ -168,6 +168,20 @@ describe("GET /claims", () => {
     const res = await request(app).get("/claims");
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/wallet/i);
+    expect(res.body.code).toBe("INVALID_REQUEST");
+    expect(res.body.requestId).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(res.headers["x-request-id"]).toBe(res.body.requestId);
+  });
+
+  it("preserves a valid caller request id on errors", async () => {
+    const requestId = "sdk-request-42";
+    const res = await request(app).get("/claims").set("x-request-id", requestId);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: "INVALID_REQUEST",
+      requestId,
+    });
+    expect(res.headers["x-request-id"]).toBe(requestId);
   });
 
   it("returns empty claims array for unknown wallet", async () => {

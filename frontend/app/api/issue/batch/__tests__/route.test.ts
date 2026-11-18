@@ -40,6 +40,9 @@ describe("POST /api/issue/batch", () => {
     expect(resEmpty.status).toBe(400);
     const bodyEmpty = await resEmpty.json();
     expect(bodyEmpty.error).toMatch(/non-empty array/i);
+    expect(bodyEmpty.code).toBe("INVALID_REQUEST");
+    expect(bodyEmpty.requestId).toMatch(/^[a-f0-9]{32}$/);
+    expect(resEmpty.headers.get("x-request-id")).toBe(bodyEmpty.requestId);
 
     const resArrayEmpty = await POST(postRequest([]));
     expect(resArrayEmpty.status).toBe(400);
@@ -122,6 +125,11 @@ describe("POST /api/issue/batch", () => {
     expect(JSON.stringify(data)).not.toContain('"credentials"');
     expect(data.results[0].error).toMatch(/aborted/i);
     expect(data.results[1].error).toMatch(/holder address is required/i);
+    expect(data.code).toBe("INVALID_REQUEST");
+    expect(data.error).toMatch(/holder address is required/i);
+    expect(data.requestId).toMatch(/^[a-f0-9]{32}$/);
+    expect(res.headers.get("x-request-id")).toBe(data.requestId);
+    expect(data.results[1].code).toBe("INVALID_REQUEST");
   });
 
   it("replays the exact successful response from an encrypted cache record", async () => {
