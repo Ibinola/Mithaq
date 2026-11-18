@@ -955,6 +955,28 @@ impl ProofRegistry {
         Self::is_verified(env, holder, credential_type, None)
     }
 
+    /// Bounded read of one delegation (#119): `Some(expiry)` while `verifier` holds a grant
+    /// from `holder` for `credential_type` that has not expired (`expiry > now`, the same
+    /// strict boundary as `check_delegated_verification`), otherwise `None`. A single-key
+    /// storage read; it never iterates. Grants are public on-chain state, so this reveals
+    /// nothing a storage reader could not already see.
+    pub fn delegation_expiry(
+        env: Env,
+        holder: Address,
+        verifier: Address,
+        credential_type: Symbol,
+    ) -> Option<u64> {
+        let expiry = env
+            .storage()
+            .persistent()
+            .get::<_, u64>(&DataKey::Delegation(holder, verifier, credential_type))?;
+        if expiry > env.ledger().timestamp() {
+            Some(expiry)
+        } else {
+            None
+        }
+    }
+
     pub fn check_claim(
         env: Env,
         holder: Address,
