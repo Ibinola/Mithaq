@@ -99,7 +99,7 @@ import express, {
   NextFunction,
   RequestHandler,
 } from "express";
-import type { Db, ClaimRow, SubmissionStatus } from "./db";
+import type { Db, ClaimRow, ClaimState, SubmissionStatus } from "./db";
 import type { Ingester } from "./ingester";
 import type { Config } from "./config";
 import { parseCorsOrigins } from "./config";
@@ -549,8 +549,52 @@ export function buildApp(
         return;
       }
 
-      const claims = await db.claimsByWallet(wallet.trim());
-      res.json({ wallet: wallet.trim(), claims: claims.map((row) => serializeClaim(row)) });
+      const credentialType = req.query["credential_type"];
+      if (
+        credentialType !== undefined &&
+        (typeof credentialType !== "string" ||
+          !VALID_CLAIM_TYPES.has(credentialType.trim()))
+      ) {
+        res.status(400).json({
+          error: `credential_type must be one of: ${[...VALID_CLAIM_TYPES].join(", ")}`,
+        });
+        return;
+      }
+
+      const issuer = req.query["issuer"];
+      if (
+        issuer !== undefined &&
+        (typeof issuer !== "string" ||
+          !StrKey.isValidEd25519PublicKey(issuer.trim()))
+      ) {
+        res.status(400).json({ error: "issuer must be a valid Stellar public key" });
+        return;
+      }
+
+      const rawState = req.query["state"];
+      const states: ClaimState[] = ["active", "expired", "revoked"];
+      if (
+        rawState !== undefined &&
+        (typeof rawState !== "string" ||
+          !states.includes(rawState.trim() as ClaimState))
+      ) {
+        res.status(400).json({ error: "state must be one of: active, expired, revoked" });
+        return;
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      const state =
+        typeof rawState === "string" ? rawState.trim() as ClaimState : undefined;
+      const claims = await db.claimsByWallet(wallet.trim(), {
+        credentialType: typeof credentialType === "string" ? credentialType.trim() : undefined,
+        issuer: typeof issuer === "string" ? issuer.trim() : undefined,
+        state,
+        now,
+      });
+      res.json({
+        wallet: wallet.trim(),
+        claims: claims.map((row) => serializeClaim(row, { now })),
+      });
     })
   );
 

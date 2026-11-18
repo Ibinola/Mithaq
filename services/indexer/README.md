@@ -61,8 +61,18 @@ Returns the operational health of the indexer and the last processed ledger sequ
 }
 ```
 
-### 2. `GET /claims?wallet=G...`
+### 2. `GET /claims?wallet=G...&credential_type=kyc&issuer=G...&state=active`
 Retrieves all recorded credential claims (active and revoked) for a Stellar wallet address.
+Optional `credential_type`, `issuer`, and `state` filters can be combined; all
+provided filters are applied by the database before claims are returned.
+`credential_type` must be one of `kyc`, `age`, `jurisdiction`, `income`,
+`funds`, `accreditation`, or `employment`. `issuer` must be a valid Stellar
+public key. `state` must be `active`, `expired`, or `revoked`. If `state` is
+omitted, all three states are included. `active` means not revoked and not
+expired; `expired` means not revoked with a nonzero expiry at or before the
+indexer's current Unix time; `revoked` means on-chain revoked, even if its
+expiry has also passed. State is derived from indexed data and uses the same
+precedence as the response's `state` field.
 ```json
 {
   "wallet": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",

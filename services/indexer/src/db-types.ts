@@ -40,6 +40,15 @@ export interface ClaimRow extends ClaimInput {
 }
 
 export type ClaimLifecycleEventType = "revoked" | "expired";
+export type ClaimState = "active" | "expired" | "revoked";
+
+export interface WalletClaimFilters {
+  credentialType?: string;
+  issuer?: string;
+  state?: ClaimState;
+  /** Unix seconds shared with response serialization for consistent state. */
+  now?: number;
+}
 
 export interface WebhookSubscriptionInput {
   url: string;
@@ -130,8 +139,11 @@ export interface Db {
   /** Read a specific claim before applying a revocation event. */
   claimByWalletAndType(wallet: string, credentialType: string): ClaimRow | undefined | Promise<ClaimRow | undefined>;
 
-  /** Return all claims for a wallet (active and revoked). */
-  claimsByWallet(wallet: string): ClaimRow[] | Promise<ClaimRow[]>;
+  /** Return wallet claims, optionally filtered by credential, issuer, and state. */
+  claimsByWallet(
+    wallet: string,
+    filters?: WalletClaimFilters
+  ): ClaimRow[] | Promise<ClaimRow[]>;
 
   /** Return aggregate counts per credential_type. */
   stats(): StatsRow[] | Promise<StatsRow[]>;
