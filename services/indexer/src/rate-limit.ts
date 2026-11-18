@@ -9,6 +9,7 @@
  */
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { sendApiError } from "./api-errors";
 
 export interface RateLimitOptions {
   windowMs: number;
@@ -121,8 +122,7 @@ export class RateLimiter {
 
       if (!result.allowed) {
         res.setHeader("Retry-After", result.resetSeconds);
-        res.status(429).json({
-          error: "too many requests",
+        sendApiError(res, 429, "too many requests", {
           retryAfter: result.resetSeconds,
         });
         return;

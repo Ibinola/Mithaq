@@ -114,6 +114,8 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { MAX_WEBHOOK_DELIVERY_ATTEMPTS } from "./webhooks";
 import { createGraphQLHandler } from "./graphql";
 import { buildHealthResponse } from "./health";
+import { randomUUID } from "crypto";
+import { sendApiError } from "./api-errors";
 
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
@@ -238,6 +240,15 @@ export function buildApp(
 ): express.Application {
   const app = express();
 
+  app.use((req, res, next) => {
+    const inbound = req.header("x-request-id");
+    const requestId =
+      inbound && /^[a-zA-Z0-9_-]{1,64}$/.test(inbound) ? inbound : randomUUID();
+    res.locals["requestId"] = requestId;
+    res.setHeader("x-request-id", requestId);
+    next();
+  });
+
   // Trust reverse proxies (e.g. AWS ALB, Cloudflare, Nginx) so client IP extraction is accurate.
   app.set("trust proxy", true);
 
@@ -286,9 +297,11 @@ export function buildApp(
     config?.webhookSigningSecret ?? process.env["WEBHOOK_SIGNING_SECRET"];
   const webhookGuard: RequestHandler = (req, res, next) => {
     if (!apiKey || !webhookSecret || webhookSecret.length < 32) {
-      res.status(503).json({
-        error: "webhook subscriptions require API_KEY and a 32-character WEBHOOK_SIGNING_SECRET",
-      });
+      sendApiError(
+        res,
+        503,
+        "webhook subscriptions require API_KEY and a 32-character WEBHOOK_SIGNING_SECRET",
+      );
       return;
     }
     guard(req, res, next);
@@ -477,7 +490,7 @@ export function buildApp(
     "/integrity/status",
     asyncHandler(async (_req, res) => {
       if (!integrity) {
-        res.status(404).json({ error: "integrity checks are not configured" });
+        sendApiError(res, 404, "integrity checks are not configured");
         return;
       }
       const report = integrity.getLastReport();
@@ -509,15 +522,13 @@ export function buildApp(
     guard,
     asyncHandler(async (req, res) => {
       if (!integrity) {
-        res.status(404).json({ error: "integrity checks are not configured" });
+        sendApiError(res, 404, "integrity checks are not configured");
         return;
       }
       const raw = req.query["sampleSize"];
       const parsed = raw === undefined ? NaN : Number(raw);
       if (raw !== undefined && (!Number.isInteger(parsed) || parsed < 1)) {
-        res.status(400).json({
-          error: "sampleSize must be a positive integer",
-        });
+        sendApiError(res, 400, "sampleSize must be a positive integer");
         return;
       }
       const report = await integrity.run(
@@ -543,9 +554,7 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const wallet = req.query["wallet"];
       if (typeof wallet !== "string" || wallet.trim() === "") {
-        res.status(400).json({
-          error: "wallet query parameter is required",
-        });
+        sendApiError(res, 400, "wallet query parameter is required");
         return;
       }
 
@@ -555,9 +564,11 @@ export function buildApp(
         (typeof credentialType !== "string" ||
           !VALID_CLAIM_TYPES.has(credentialType.trim()))
       ) {
-        res.status(400).json({
-          error: `credential_type must be one of: ${[...VALID_CLAIM_TYPES].join(", ")}`,
-        });
+        sendApiError(
+          res,
+          400,
+          `credential_type must be one of: ${[...VALID_CLAIM_TYPES].join(", ")}`,
+        );
         return;
       }
 
@@ -567,7 +578,7 @@ export function buildApp(
         (typeof issuer !== "string" ||
           !StrKey.isValidEd25519PublicKey(issuer.trim()))
       ) {
-        res.status(400).json({ error: "issuer must be a valid Stellar public key" });
+        sendApiError(res, 400, "issuer must be a valid Stellar public key");
         return;
       }
 
@@ -578,7 +589,7 @@ export function buildApp(
         (typeof rawState !== "string" ||
           !states.includes(rawState.trim() as ClaimState))
       ) {
-        res.status(400).json({ error: "state must be one of: active, expired, revoked" });
+        sendApiError(res, 400, "state must be one of: active, expired, revoked");
         return;
       }
 
@@ -627,7 +638,7 @@ export function buildApp(
         try {
           cursor = decodeCursor(String(rawCursor));
         } catch {
-          res.status(400).json({ error: "invalid cursor" });
+          sendApiError(res, 400, "invalid cursor");
           return;
         }
       }
@@ -652,7 +663,7 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const issuer = req.params["issuer"];
       if (typeof issuer !== "string" || issuer.trim() === "") {
-        res.status(400).json({ error: "issuer path parameter is required" });
+        sendApiError(res, 400, "issuer path parameter is required");
         return;
       }
       const stats = await db.issuerStats(issuer.trim());
@@ -667,7 +678,7 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const issuer = req.params["issuer"];
       if (typeof issuer !== "string" || issuer.trim() === "") {
-        res.status(400).json({ error: "issuer path parameter is required" });
+        sendApiError(res, 400, "issuer path parameter is required");
         return;
       }
       const rawClaims = await db.claimsByIssuer(issuer.trim());
@@ -685,7 +696,7 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const issuer = req.params["issuer"];
       if (typeof issuer !== "string" || issuer.trim() === "") {
-        res.status(400).json({ error: "issuer path parameter is required" });
+        sendApiError(res, 400, "issuer path parameter is required");
         return;
       }
       const analytics = await db.issuerAnalytics(issuer.trim());
@@ -700,7 +711,7 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const commitment = req.params["commitment"];
       if (typeof commitment !== "string" || commitment.trim() === "") {
-        res.status(400).json({ error: "commitment path parameter is required" });
+        sendApiError(res, 400, "commitment path parameter is required");
         return;
       }
       const wallet = typeof req.query["wallet"] === "string" ? req.query["wallet"].trim() : undefined;
@@ -727,12 +738,12 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const id = parseInt(req.params["id"], 10);
       if (isNaN(id)) {
-        res.status(400).json({ error: "invalid id" });
+        sendApiError(res, 400, "invalid id");
         return;
       }
       const appRow = await db.getAppSubmission(id);
       if (!appRow) {
-        res.status(404).json({ error: "app not found" });
+        sendApiError(res, 404, "app not found");
         return;
       }
       res.json({ app: appRow });
@@ -749,65 +760,67 @@ export function buildApp(
         req.body;
 
       if (typeof appName !== "string" || appName.trim().length === 0) {
-        res.status(400).json({ error: "appName is required" });
+        sendApiError(res, 400, "appName is required");
         return;
       }
       if (appName.trim().length > MAX_APP_NAME) {
-        res.status(400).json({ error: `appName must be at most ${MAX_APP_NAME} characters` });
+        sendApiError(res, 400, `appName must be at most ${MAX_APP_NAME} characters`);
         return;
       }
 
       if (typeof description !== "string" || description.trim().length === 0) {
-        res.status(400).json({ error: "description is required" });
+        sendApiError(res, 400, "description is required");
         return;
       }
       if (description.trim().length > MAX_DESCRIPTION) {
-        res.status(400).json({ error: `description must be at most ${MAX_DESCRIPTION} characters` });
+        sendApiError(res, 400, `description must be at most ${MAX_DESCRIPTION} characters`);
         return;
       }
 
       if (!Array.isArray(requiredClaims) || requiredClaims.length === 0) {
-        res.status(400).json({ error: "requiredClaims must be a non-empty array" });
+        sendApiError(res, 400, "requiredClaims must be a non-empty array");
         return;
       }
       if (requiredClaims.length > MAX_CLAIMS) {
-        res.status(400).json({ error: `requiredClaims must contain at most ${MAX_CLAIMS} items` });
+        sendApiError(res, 400, `requiredClaims must contain at most ${MAX_CLAIMS} items`);
         return;
       }
       for (const claim of requiredClaims) {
         if (typeof claim !== "string" || !VALID_CLAIM_TYPES.has(claim)) {
-          res.status(400).json({
-            error: `invalid claim type: "${claim}". Valid types: ${[...VALID_CLAIM_TYPES].join(", ")}`,
-          });
+          sendApiError(
+            res,
+            400,
+            `invalid claim type: "${claim}". Valid types: ${[...VALID_CLAIM_TYPES].join(", ")}`,
+          );
           return;
         }
       }
 
       if (typeof verifyUrl !== "string" || verifyUrl.trim().length === 0) {
-        res.status(400).json({ error: "verifyUrl is required" });
+        sendApiError(res, 400, "verifyUrl is required");
         return;
       }
       try {
         const parsed = new URL(verifyUrl.trim());
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-          res.status(400).json({ error: "verifyUrl must use http or https" });
+          sendApiError(res, 400, "verifyUrl must use http or https");
           return;
         }
       } catch {
-        res.status(400).json({ error: "verifyUrl must be a valid URL" });
+        sendApiError(res, 400, "verifyUrl must be a valid URL");
         return;
       }
 
       if (typeof contactEmail !== "string" || contactEmail.trim().length === 0) {
-        res.status(400).json({ error: "contactEmail is required" });
+        sendApiError(res, 400, "contactEmail is required");
         return;
       }
       if (contactEmail.trim().length > MAX_CONTACT_EMAIL) {
-        res.status(400).json({ error: `contactEmail must be at most ${MAX_CONTACT_EMAIL} characters` });
+        sendApiError(res, 400, `contactEmail must be at most ${MAX_CONTACT_EMAIL} characters`);
         return;
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())) {
-        res.status(400).json({ error: "contactEmail must be a valid email address" });
+        sendApiError(res, 400, "contactEmail must be a valid email address");
         return;
       }
 
@@ -831,17 +844,17 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const id = parseInt(req.params["id"], 10);
       if (isNaN(id)) {
-        res.status(400).json({ error: "invalid id" });
+        sendApiError(res, 400, "invalid id");
         return;
       }
       const { status } = req.body ?? {};
       if (status !== "approved" && status !== "rejected" && status !== "pending") {
-        res.status(400).json({ error: "status must be one of: approved, rejected, pending" });
+        sendApiError(res, 400, "status must be one of: approved, rejected, pending");
         return;
       }
       const existing = await db.getAppSubmission(id);
       if (!existing) {
-        res.status(404).json({ error: "app not found" });
+        sendApiError(res, 404, "app not found");
         return;
       }
       await db.updateSubmissionStatus(id, status as SubmissionStatus);
@@ -858,14 +871,14 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const { url, wallet, claimType } = req.body ?? {};
       if (typeof url !== "string" || url.length > 2048) {
-        res.status(400).json({ error: "url must be a valid HTTPS URL" });
+        sendApiError(res, 400, "url must be a valid HTTPS URL");
         return;
       }
       let parsedUrl: URL;
       try {
         parsedUrl = new URL(url);
       } catch {
-        res.status(400).json({ error: "url must be a valid HTTPS URL" });
+        sendApiError(res, 400, "url must be a valid HTTPS URL");
         return;
       }
       if (
@@ -878,22 +891,18 @@ export function buildApp(
         parsedUrl.hostname.endsWith(".localhost") ||
         parsedUrl.hostname.endsWith(".local")
       ) {
-        res.status(400).json({
-          error: "url must be an HTTPS URL with a public DNS hostname and no credentials",
-        });
+        sendApiError(res, 400, "url must be an HTTPS URL with a public DNS hostname and no credentials");
         return;
       }
       if (
         typeof wallet !== "string" ||
         !StrKey.isValidEd25519PublicKey(wallet)
       ) {
-        res.status(400).json({ error: "wallet must be a valid Stellar public key" });
+        sendApiError(res, 400, "wallet must be a valid Stellar public key");
         return;
       }
       if (typeof claimType !== "string" || !VALID_CLAIM_TYPES.has(claimType)) {
-        res.status(400).json({
-          error: `claimType must be one of: ${[...VALID_CLAIM_TYPES].join(", ")}`,
-        });
+        sendApiError(res, 400, `claimType must be one of: ${[...VALID_CLAIM_TYPES].join(", ")}`);
         return;
       }
 
@@ -912,7 +921,7 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const wallet = req.query["wallet"];
       if (wallet !== undefined && typeof wallet !== "string") {
-        res.status(400).json({ error: "wallet must be a single value" });
+        sendApiError(res, 400, "wallet must be a single value");
         return;
       }
       res.json({
@@ -927,11 +936,11 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const id = Number(req.params["id"]);
       if (!Number.isSafeInteger(id) || id < 1) {
-        res.status(400).json({ error: "id must be a positive integer" });
+        sendApiError(res, 400, "id must be a positive integer");
         return;
       }
       if (!(await db.deleteWebhookSubscription(id))) {
-        res.status(404).json({ error: "subscription not found" });
+        sendApiError(res, 404, "subscription not found");
         return;
       }
       res.status(204).end();
@@ -944,12 +953,12 @@ export function buildApp(
     asyncHandler(async (req, res) => {
       const id = Number(req.params["id"]);
       if (!Number.isSafeInteger(id) || id < 1) {
-        res.status(400).json({ error: "id must be a positive integer" });
+        sendApiError(res, 400, "id must be a positive integer");
         return;
       }
       const subscriptions = await db.listWebhookSubscriptions();
       if (!subscriptions.some((subscription) => subscription.id === id)) {
-        res.status(404).json({ error: "subscription not found" });
+        sendApiError(res, 404, "subscription not found");
         return;
       }
       const deliveries = await db.webhookDeliveries(id, 100);
@@ -979,13 +988,13 @@ export function buildApp(
 
   // â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   app.use((_req, res) => {
-    res.status(404).json({ error: "not found" });
+    sendApiError(res, 404, "not found");
   });
 
   // â”€â”€ Error handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     console.error("[indexer/api] unhandled error:", err);
-    res.status(500).json({ error: "internal server error" });
+    sendApiError(res, 500, "internal server error");
   });
 
   return app;
