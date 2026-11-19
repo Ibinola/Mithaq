@@ -299,6 +299,9 @@ describe("validation", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toMatch(/Invalid credential type/);
+    expect(body.code).toBe("INVALID_REQUEST");
+    expect(body.requestId).toMatch(/^[a-f0-9]{32}$/);
+    expect(res.headers.get("x-request-id")).toBe(body.requestId);
   });
 
   it("accepts the multi-claim shape (credential_types + attributes)", async () => {
@@ -388,6 +391,7 @@ describe("idempotency", () => {
     expect(replay.headers.get("X-Idempotency-Replay")).toBe("redacted");
     await expect(replay.json()).resolves.toMatchObject({
       code: "IDEMPOTENCY_RESPONSE_REDACTED",
+      requestId: expect.any(String),
     });
     expect(issueSpy).toHaveBeenCalledTimes(1);
   });

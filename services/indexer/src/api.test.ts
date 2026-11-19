@@ -143,10 +143,45 @@ describe("GET /health", () => {
 // ── /claims ──────────────────────────────────────────────────────────────────
 
 describe("GET /claims", () => {
+  const validIssuer = Keypair.random().publicKey();
+
+  async function insertClaim(
+    credential_type: string,
+    issuer: string,
+    expiry: number,
+    revoked = 0
+  ) {
+    await db.upsertClaim({
+      wallet: "GALICE",
+      credential_type,
+      issuer,
+      verified_at: 1000,
+      expiry,
+      ledger_sequence: 42,
+      threshold: null,
+      revoked,
+      reason_code: revoked ? "fraud" : "other",
+    });
+  }
+
   it("returns 400 when wallet param is missing", async () => {
     const res = await request(app).get("/claims");
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/wallet/i);
+    expect(res.body.code).toBe("INVALID_REQUEST");
+    expect(res.body.requestId).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(res.headers["x-request-id"]).toBe(res.body.requestId);
+  });
+
+  it("preserves a valid caller request id on errors", async () => {
+    const requestId = "sdk-request-42";
+    const res = await request(app).get("/claims").set("x-request-id", requestId);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: "INVALID_REQUEST",
+      requestId,
+    });
+    expect(res.headers["x-request-id"]).toBe(requestId);
   });
 
   it("returns empty claims array for unknown wallet", async () => {
@@ -176,6 +211,42 @@ describe("GET /claims", () => {
       credential_type: "kyc",
       revoked: 0,
     });
+  });
+
+  it("filters by credential type, issuer, and derived lifecycle state", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    await insertClaim("kyc", validIssuer, now + 1000);
+    await insertClaim("age", validIssuer, now + 1000);
+    await insertClaim("kyc", Keypair.random().publicKey(), now + 1000);
+    await insertClaim("kyc", validIssuer, now - 1);
+    await insertClaim("kyc", validIssuer, now + 1000, 1);
+
+    const active = await request(app)
+      .get(`/claims?wallet=GALICE&credential_type=kyc&issuer=${validIssuer}&state=active`);
+    expect(active.status).toBe(200);
+    expect(active.body.claims).toHaveLength(1);
+    expect(active.body.claims[0].state).toBe("active");
+
+    const expired = await request(app)
+      .get(`/claims?wallet=GALICE&state=expired&issuer=${validIssuer}`);
+    expect(expired.status).toBe(200);
+    expect(expired.body.claims).toHaveLength(1);
+    expect(expired.body.claims[0].state).toBe("expired");
+
+    const revoked = await request(app).get("/claims?wallet=GALICE&state=revoked");
+    expect(revoked.status).toBe(200);
+    expect(revoked.body.claims).toHaveLength(1);
+    expect(revoked.body.claims[0].state).toBe("revoked");
+  });
+
+  it.each([
+    ["credential_type", "unknown"],
+    ["issuer", "GISSUER"],
+    ["state", "pending"],
+  ])("rejects an invalid %s filter", async (filter, value) => {
+    const res = await request(app).get(`/claims?wallet=GALICE&${filter}=${value}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(new RegExp(filter, "i"));
   });
 });
 

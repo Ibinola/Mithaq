@@ -26,6 +26,7 @@ import {
 import { enforceIpRateLimit, enforceWalletRateLimit } from "./handlers/rateLimit";
 import { runIssuanceFlow } from "./handlers/issuanceFlow";
 import { authenticateTenant, authErrorResponse } from "@/app/api/_middleware";
+import { standardizeApiErrorResponse } from "@/lib/api-errors";
 
 /**
  * POST /api/issue — thin dispatcher.
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest) {
     if (idempotencyKey) {
       idempotencyInFlightFail(idempotencyKey, new Error("rate limited"));
     }
-    return ipLimited;
+    return standardizeApiErrorResponse(ipLimited, requestId);
   }
 
   try {
@@ -122,6 +123,7 @@ function replayIdempotencyRecord(record: IdempotencyRecord, requestId: string): 
     {
       code: "IDEMPOTENCY_RESPONSE_REDACTED",
       error: "This Idempotency-Key already completed; credential data is not retained for replay.",
+      requestId,
     },
     { status: 409, headers },
   );
@@ -148,7 +150,7 @@ async function executeRequest(
     if (idempotencyKey) {
       idempotencyInFlightFail(idempotencyKey, new Error(tenantRes.error));
     }
-    return authErrorResponse(tenantRes, requestId);
+    return standardizeApiErrorResponse(authErrorResponse(tenantRes, requestId), requestId);
   }
   const tenant = tenantRes.value;
 
@@ -160,8 +162,7 @@ async function executeRequest(
       idempotencyInFlightFail(idempotencyKey, new Error("invalid request body"));
     }
     const res = bodyErrorResponse(parsed.error);
-    res.headers.set("x-request-id", requestId);
-    return res;
+    return standardizeApiErrorResponse(res, requestId);
   }
 
   const request = normalizeIssueRequest(parsed.body, tenant);
@@ -170,7 +171,7 @@ async function executeRequest(
 
   const sendResponse = async (response: NextResponse, record?: IdempotencyRecord) => {
     const durationMs = Date.now() - startTime;
-    response.headers.set("x-request-id", requestId);
+    response = await standardizeApiErrorResponse(response, requestId);
 
     if (idempotencyKey) {
       try {

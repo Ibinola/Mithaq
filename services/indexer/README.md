@@ -39,7 +39,7 @@ To prevent scraping and denial-of-service, all HTTP endpoints are protected by p
   - `RateLimit-Limit`: Maximum requests permitted within the window.
   - `RateLimit-Remaining`: Remaining request quota in the current window.
   - `RateLimit-Reset`: Number of seconds until the rate limit window resets.
-- **429 Response**: When the quota is exceeded, the server returns status `429` with a `Retry-After: <seconds>` header and `{ "error": "too many requests", "retryAfter": <seconds> }`.
+- **429 Response**: When the quota is exceeded, the server returns status `429` with a `Retry-After: <seconds>` header and the standard error fields described below.
 
 ### Authentication & API Key Policy
 - **Decision**: Public read endpoints (`/health`, `/claims`, `/stats`, `/recent`) do **not** require API keys.
@@ -51,6 +51,11 @@ To prevent scraping and denial-of-service, all HTTP endpoints are protected by p
 
 Responses are JSON unless noted otherwise. Read endpoints are public by default;
 administrative writes and webhook subscription management require `API_KEY`.
+All REST API errors use the shape `{ "error": "...", "code": "...", "requestId": "..." }`
+and include the same identifier in the `x-request-id` response header. Error codes
+are stable categories (`INVALID_REQUEST`, `UNAUTHORIZED`, `NOT_FOUND`,
+`RATE_LIMITED`, `INTERNAL_ERROR`, and related status-specific codes); endpoint
+status codes and any additional fields such as `retryAfter` are preserved.
 
 ### 1. `GET /health`
 Returns the operational health of the indexer and the last processed ledger sequence.
@@ -61,8 +66,18 @@ Returns the operational health of the indexer and the last processed ledger sequ
 }
 ```
 
-### 2. `GET /claims?wallet=G...`
+### 2. `GET /claims?wallet=G...&credential_type=kyc&issuer=G...&state=active`
 Retrieves all recorded credential claims (active and revoked) for a Stellar wallet address.
+Optional `credential_type`, `issuer`, and `state` filters can be combined; all
+provided filters are applied by the database before claims are returned.
+`credential_type` must be one of `kyc`, `age`, `jurisdiction`, `income`,
+`funds`, `accreditation`, or `employment`. `issuer` must be a valid Stellar
+public key. `state` must be `active`, `expired`, or `revoked`. If `state` is
+omitted, all three states are included. `active` means not revoked and not
+expired; `expired` means not revoked with a nonzero expiry at or before the
+indexer's current Unix time; `revoked` means on-chain revoked, even if its
+expiry has also passed. State is derived from indexed data and uses the same
+precedence as the response's `state` field.
 ```json
 {
   "wallet": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",

@@ -37,6 +37,7 @@
 
 import { timingSafeEqual } from "crypto";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { sendApiError } from "./api-errors";
 
 /**
  * Extract the raw token string from the request.
@@ -108,12 +109,12 @@ export function requireAuth(apiKey: string | undefined): RequestHandler {
     const token = extractToken(req);
 
     if (token === undefined) {
-      res.status(401).json({ error: "authentication required" });
+      sendApiError(res, 401, "authentication required");
       return;
     }
 
     if (!safeEqual(token, apiKey)) {
-      res.status(401).json({ error: "invalid API key" });
+      sendApiError(res, 401, "invalid API key");
       return;
     }
 

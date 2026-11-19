@@ -230,8 +230,32 @@ export function createSharedDb(dialect: SqlDialect): Db {
       return rows[0];
     },
 
-    async claimsByWallet(wallet) {
-      return claims("SELECT * FROM claims WHERE wallet = ?", [wallet]);
+    async claimsByWallet(wallet, filters = {}) {
+      const conditions = ["wallet = ?"];
+      const params: (string | number)[] = [wallet];
+
+      if (filters.credentialType !== undefined) {
+        conditions.push("credential_type = ?");
+        params.push(filters.credentialType);
+      }
+      if (filters.issuer !== undefined) {
+        conditions.push("issuer = ?");
+        params.push(filters.issuer);
+      }
+      if (filters.state === "revoked") {
+        conditions.push("revoked = 1");
+      } else if (filters.state === "expired") {
+        conditions.push("revoked = 0 AND expiry > 0 AND expiry <= ?");
+        params.push(filters.now ?? Math.floor(Date.now() / 1000));
+      } else if (filters.state === "active") {
+        conditions.push("revoked = 0 AND (expiry = 0 OR expiry > ?)");
+        params.push(filters.now ?? Math.floor(Date.now() / 1000));
+      }
+
+      return claims(
+        `SELECT * FROM claims WHERE ${conditions.join(" AND ")}`,
+        params,
+      );
     },
 
     async stats() {

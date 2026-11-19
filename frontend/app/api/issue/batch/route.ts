@@ -35,6 +35,7 @@ import { validateTenantCredentialTypes } from "@/lib/tenancy";
 import { authenticateTenant, authErrorResponse } from "@/app/api/_middleware";
 import { normalizeAttributes } from "@/lib/attribute-normalizer";
 import { equals } from "@/lib/crypto";
+import { standardizeApiErrorResponse } from "@/lib/api-errors";
 
 const SIM_ACCOUNT =
   env.NEXT_PUBLIC_ISSUER_ADDRESS ?? "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -66,6 +67,7 @@ export type BatchItemResult =
       success: false;
       holder?: string;
       error: string;
+      code: string;
     };
 
 export interface BatchIssueResponse {
@@ -73,6 +75,9 @@ export interface BatchIssueResponse {
   successful: number;
   failed: number;
   results: BatchItemResult[];
+  error?: string;
+  code?: string;
+  requestId?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -82,9 +87,12 @@ export async function POST(req: NextRequest) {
   const rawKey = req.headers.get("Idempotency-Key")?.trim() || undefined;
   const idempotencyKey = rawKey && isValidIdempotencyKey(rawKey) ? rawKey : undefined;
   if (idempotencyKey && !hasReplayEncryptionKey()) {
-    return NextResponse.json(
-      { error: "Idempotent batch issuance is not configured for encrypted replay." },
-      { status: 503, headers: { "x-request-id": requestId } },
+    return standardizeApiErrorResponse(
+      NextResponse.json(
+        { error: "Idempotent batch issuance is not configured for encrypted replay." },
+        { status: 503, headers: { "x-request-id": requestId } },
+      ),
+      requestId,
     );
   }
   if (rawKey && !idempotencyKey) {
@@ -137,7 +145,10 @@ export async function POST(req: NextRequest) {
     if (idempotencyKey) {
       idempotencyInFlightFail(idempotencyKey, new Error("rate limited"));
     }
-    return tooManyRequestsResponse(ipResult.retryAfterMs);
+    return standardizeApiErrorResponse(
+      tooManyRequestsResponse(ipResult.retryAfterMs),
+      requestId,
+    );
   }
 
   try {
@@ -164,7 +175,11 @@ function replayIdempotencyRecord(record: IdempotencyRecord, requestId: string): 
       });
     } catch {
       return NextResponse.json(
-        { error: "The encrypted idempotency response could not be restored." },
+        {
+          error: "The encrypted idempotency response could not be restored.",
+          code: "IDEMPOTENCY_REPLAY_UNAVAILABLE",
+          requestId,
+        },
         { status: 503, headers },
       );
     }
@@ -176,6 +191,7 @@ function replayIdempotencyRecord(record: IdempotencyRecord, requestId: string): 
     {
       code: "IDEMPOTENCY_RESPONSE_REDACTED",
       error: "This Idempotency-Key already completed; credential data is not retained for replay.",
+      requestId,
     },
     { status: 409, headers },
   );
@@ -201,7 +217,7 @@ async function executeBatchRequest(
     if (idempotencyKey) {
       idempotencyInFlightFail(idempotencyKey, new Error(tenantRes.error));
     }
-    return authErrorResponse(tenantRes, requestId);
+    return standardizeApiErrorResponse(authErrorResponse(tenantRes, requestId), requestId);
   }
   const tenant = tenantRes.value;
 
@@ -211,8 +227,7 @@ async function executeBatchRequest(
       idempotencyInFlightFail(idempotencyKey, new Error("invalid request body"));
     }
     const res = bodyErrorResponse(parsed.error);
-    res.headers.set("x-request-id", requestId);
-    return res;
+    return standardizeApiErrorResponse(res, requestId);
   }
 
   const raw = parsed.body;
@@ -224,7 +239,7 @@ async function executeBatchRequest(
   }
 
   const sendResponse = async (response: NextResponse) => {
-    response.headers.set("x-request-id", requestId);
+    response = await standardizeApiErrorResponse(response, requestId);
 
     if (idempotencyKey) {
       try {
@@ -286,7 +301,12 @@ async function executeBatchRequest(
     const index = i;
 
     if (!item || typeof item !== "object") {
-      results.push({ index, success: false, error: "Invalid item payload" });
+      results.push({
+        index,
+        success: false,
+        error: "Invalid item payload",
+        code: "INVALID_REQUEST",
+      });
       failed++;
       break;
     }
@@ -298,7 +318,12 @@ async function executeBatchRequest(
     const expiry = item.expiry ?? "90 days";
 
     if (!holder) {
-      results.push({ index, success: false, error: "holder address is required" });
+      results.push({
+        index,
+        success: false,
+        error: "holder address is required",
+        code: "INVALID_REQUEST",
+      });
       failed++;
       break;
     }
@@ -309,6 +334,7 @@ async function executeBatchRequest(
         success: false,
         holder,
         error: `Unauthorized issuerId for tenant '${tenant.id}'. Configured issuerId is '${tenant.config.issuerId}'.`,
+        code: "FORBIDDEN",
       });
       failed++;
       break;
@@ -326,6 +352,7 @@ async function executeBatchRequest(
         success: false,
         holder,
         error: `Rate limit exceeded for holder. Try again in ${Math.ceil(walletResult.retryAfterMs / 1000)}s`,
+        code: "RATE_LIMITED",
       });
       failed++;
       break;
@@ -338,6 +365,7 @@ async function executeBatchRequest(
         success: false,
         holder,
         error: "credential_types must contain at least one type",
+        code: "INVALID_REQUEST",
       });
       failed++;
       break;
@@ -350,6 +378,7 @@ async function executeBatchRequest(
         success: false,
         holder,
         error: `Invalid credential type: ${invalidType}`,
+        code: "INVALID_REQUEST",
       });
       failed++;
       break;
@@ -363,6 +392,7 @@ async function executeBatchRequest(
           success: false,
           holder,
           error: `Tenant '${tenant.id}' is not authorized to issue credential type '${typeCheck.disallowedType}'.`,
+          code: "FORBIDDEN",
         });
         failed++;
         break;
@@ -388,6 +418,7 @@ async function executeBatchRequest(
           success: false,
           holder,
           error: "Selected issuer is not registered or private key mismatch on IssuerRegistry.",
+          code: "ISSUER_CONFIGURATION_ERROR",
         });
         failed++;
         break;
@@ -432,6 +463,7 @@ async function executeBatchRequest(
         success: false,
         holder,
         error: (err as Error).message || "Signing failed",
+        code: "ISSUANCE_FAILED",
       });
       failed++;
       break;
@@ -452,10 +484,13 @@ async function executeBatchRequest(
   if (failed > 0) {
     const failure = results.find((result) => !result.success);
     const message = failure && !failure.success ? failure.error : "Batch issuance failed.";
+    const errorCode = failure && !failure.success ? failure.code : "ISSUANCE_FAILED";
     const payload: BatchIssueResponse = {
       total: items.length,
       successful: 0,
       failed: items.length,
+      error: message,
+      code: errorCode,
       results: items.map((_, index) => ({
         index,
         success: false,
@@ -463,6 +498,7 @@ async function executeBatchRequest(
           index === (failure?.index ?? -1)
             ? message
             : "Batch aborted because another item failed.",
+        code: index === (failure?.index ?? -1) ? errorCode : "BATCH_ABORTED",
       })),
     };
     return sendResponse(NextResponse.json(payload, { status: 422 }));
