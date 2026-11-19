@@ -1038,6 +1038,23 @@ fn pause_and_unpause_emit_expected_events() {
 }
 
 #[test]
+fn is_paused_reports_submission_pause_state() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let dummy = Address::generate(&env);
+
+    let pr_id = env.register(ProofRegistry, (admin, dummy.clone(), dummy));
+    let registry = ProofRegistryClient::new(&env, &pr_id);
+
+    assert!(!registry.is_paused());
+    env.mock_all_auths();
+    registry.pause();
+    assert!(registry.is_paused());
+    registry.unpause();
+    assert!(!registry.is_paused());
+}
+
+#[test]
 fn holder_self_revoke_emits_a_lifecycle_event() {
     let env = Env::default();
     env.mock_all_auths();
