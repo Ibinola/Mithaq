@@ -482,6 +482,24 @@ fn pause(env)
   revocation keep working. Pausing an already-paused contract is permitted and
   re-emits the event.
 
+### `is_paused`
+
+```rust
+fn is_paused(env) -> bool
+```
+
+- **Audience:** Holder, Integrator
+- **Auth:** none (public read).
+- **Stability:** Stable
+- **Returns:** `true` when new proof submissions are currently paused;
+  otherwise `false`.
+- **Panics:** never.
+- **Events:** none.
+- **Notes:** use as a preflight read before asking a holder to sign, not as a
+  guarantee that a later submission will succeed. Pause state can change
+  between the read and submission; the contract's submission-time check and
+  `SubmissionsPaused` error remain authoritative.
+
 ### `unpause`
 
 ```rust
@@ -758,6 +776,7 @@ fn last_migration_timestamp(env) -> u64
 | Nullifier checks & recording | `record_nullifier`, `is_nullifier_used` | Holder / Integrator |
 | Verify a claim | `is_verified`, `check_claim`, `get_record`, `claim_expiry` | Integrator |
 | Consent-scoped reads | `grant_verification`, `revoke_verification`, `check_delegated_verification`, `delegation_expiry` | Holder / Integrator |
+| Submission pause preflight | `is_paused` | Holder / Integrator |
 | Revoke | `revoke_proof`, `revoke_all` (holder), `revoke` (issuer) | Holder / Issuer |
 
 **Operational / governance — may evolve between minor versions:**

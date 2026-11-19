@@ -50,7 +50,7 @@ use soroban_sdk::{
 // Increment MAJOR on breaking changes (new entry points, changed ABI)
 // Increment MINOR on additive changes (new events, new query endpoints)
 // Increment PATCH on bug fixes with no ABI changes
-const CONTRACT_VERSION: u32 = 1_001_000; // 1.1.0 encoded as (major * 1000000) + (minor * 1000) + patch
+const CONTRACT_VERSION: u32 = 1_002_000; // 1.2.0 encoded as (major * 1000000) + (minor * 1000) + patch
 
 // ── Data schema versioning ──────────────────────────────────────────────────────
 // ProofRecord schema versions: used for forward-compatible migrations.
@@ -529,6 +529,15 @@ impl ProofRegistry {
                 paused_at: env.ledger().timestamp(),
             },
         );
+    }
+
+    /// Returns whether new proof submissions are currently paused.
+    ///
+    /// This public read is a preflight convenience only; the state can change
+    /// before a submission is included, so submission-time checks remain
+    /// authoritative.
+    pub fn is_paused(env: Env) -> bool {
+        Self::submissions_paused(&env)
     }
 
     #[allow(deprecated)]
@@ -1385,7 +1394,7 @@ impl ProofRegistry {
             .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
     }
 
-    fn is_paused(env: &Env) -> bool {
+    fn submissions_paused(env: &Env) -> bool {
         env.storage()
             .instance()
             .get(&DataKey::Paused)
@@ -1393,7 +1402,7 @@ impl ProofRegistry {
     }
 
     fn ensure_not_paused(env: &Env) {
-        if Self::is_paused(env) {
+        if Self::submissions_paused(env) {
             panic_with_error!(env, Error::SubmissionsPaused);
         }
     }
