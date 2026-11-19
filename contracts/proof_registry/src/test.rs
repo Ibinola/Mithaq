@@ -525,7 +525,6 @@ fn pause_blocks_submit_reads_still_work_and_unpause_restores() {
     let h = deploy(&env);
     let holder = Address::generate(&env);
 
-    submit(&env, &h, &holder, 9999);
     h.registry.pause();
     let res = h.registry.try_submit_proof(
         &holder,
@@ -537,7 +536,105 @@ fn pause_blocks_submit_reads_still_work_and_unpause_restores() {
         &9999,
     );
     assert!(res.is_err());
+    assert!(h
+        .registry
+        .get_record(&holder, &symbol_short!("kyc"))
+        .is_none());
+
     h.registry.unpause();
+    submit(&env, &h, &holder, 9999);
+    assert!(h
+        .registry
+        .get_record(&holder, &symbol_short!("kyc"))
+        .is_some());
+}
+
+#[test]
+fn pause_blocks_batch_submissions() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = deploy_multi(&env);
+    let holder = Address::generate(&env);
+    let submissions = vec![
+        &env,
+        kyc_submission(&env, &h.kyc_issuer, 1000),
+        ProofSubmission {
+            credential_type: symbol_short!("funds"),
+            proof: FUNDS.proof_bytes(&env),
+            public_inputs: public_inputs_to_u32(&env, FUNDS.public_inputs),
+            issuer_id: h.funds_issuer.clone(),
+            expiry: 2000,
+            vk_version: None,
+        },
+    ];
+
+    h.registry.pause();
+    assert!(h
+        .registry
+        .try_submit_proofs(&holder, &submissions)
+        .is_err());
+    assert!(h
+        .registry
+        .get_record(&holder, &symbol_short!("kyc"))
+        .is_none());
+    assert!(h
+        .registry
+        .get_record(&holder, &symbol_short!("funds"))
+        .is_none());
+}
+
+#[test]
+fn pause_blocks_aggregate_submissions() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = deploy_aggregate(&env);
+    let holder = Address::generate(&env);
+
+    h.c.registry.pause();
+    assert!(h
+        .c
+        .try_submit_aggregate(&env, &holder, &h.issuer, &[1000u64, 2000u64]));
+    assert!(!h.c.verify(&env, &holder, &KYC));
+    assert!(!h.c.verify(&env, &holder, &AGE));
+}
+
+#[test]
+fn pause_blocks_nullifier_bearing_submissions_and_nullifier_writes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = deploy(&env);
+    let holder = Address::generate(&env);
+    let app_context = BytesN::from_array(&env, &[42u8; 32]);
+    let nullifier = BytesN::from_array(&env, &[99u8; 32]);
+    let standalone_nullifier = BytesN::from_array(&env, &[100u8; 32]);
+
+    h.registry.pause();
+    assert!(h
+        .registry
+        .try_submit_proof_with_nullifier(
+            &holder,
+            &h.issuer,
+            &symbol_short!("kyc"),
+            &KYC.proof_bytes(&env),
+            &KYC.public_inputs_bytes(&env),
+            &None,
+            &1000,
+            &app_context,
+            &nullifier,
+        )
+        .is_err());
+    assert!(!h.registry.is_nullifier_used(&app_context, &nullifier));
+    assert!(h
+        .registry
+        .try_record_nullifier(&app_context, &standalone_nullifier)
+        .is_err());
+    assert!(!h
+        .registry
+        .is_nullifier_used(&app_context, &standalone_nullifier));
+    assert!(h
+        .registry
+        .get_record(&holder, &symbol_short!("kyc"))
+        .is_none());
 }
 
 #[test]

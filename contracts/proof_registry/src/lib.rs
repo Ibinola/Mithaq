@@ -511,10 +511,13 @@ impl ProofRegistry {
         }
     }
 
-    /// Pause new submissions. Pauser-role only — the `pauser` role may be held
-    /// by a different key than the root admin, so emergency pause power can be
-    /// delegated (e.g. to an operations or security key) without handing over
-    /// full administration.
+    /// Pause new proof submissions and nullifier writes. This blocks
+    /// `submit_proof`, `submit_proofs`, `submit_aggregate_proof`,
+    /// `submit_proof_with_nullifier`, and `record_nullifier`; reads and claim
+    /// maintenance remain available. Pauser-role only — the `pauser` role may
+    /// be held by a different key than the root admin, so emergency pause
+    /// power can be delegated (e.g. to an operations or security key) without
+    /// handing over full administration.
     #[allow(deprecated)]
     pub fn pause(env: Env) {
         let pauser = Self::require_role(&env, &symbol_short!("pauser"));
